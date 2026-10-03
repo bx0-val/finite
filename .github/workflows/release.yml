@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run compile
+      - run: npm test
+      - name: Check tag matches package.json
+        run: |
+          version="$(node -p 'require("./package.json").version')"
+          [ "v$version" = "$GITHUB_REF_NAME" ] || { echo "Tag $GITHUB_REF_NAME does not match package.json version $version"; exit 1; }
+      - run: npm run zip
+      - run: npm run zip:firefox
+      - name: Release notes from CHANGELOG.md
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v v="$version" '
+            $0 ~ "^## \\[" v "\\]" { on = 1; next }
+            on && /^## \[/ { exit }
+            on && /^\[.*\]: / { next }
+            on { print }
+          ' CHANGELOG.md > notes.md
+          cat >> notes.md <<'NOTES'
+
+          ### Install
+          - **Chrome / Edge / Brave:** unzip `*-chrome.zip`, then use *Load unpacked* in `chrome://extensions` with Developer mode on.
+          - **Firefox:** `about:debugging` → *Load Temporary Add-on…* → pick `*-firefox.zip`.
+          - `*-sources.zip` is the source bundle for store review.
+          NOTES
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          flags=""
+          case "$GITHUB_REF_NAME" in v0.*|*-*) flags="--prerelease" ;; esac
+          gh release create "$GITHUB_REF_NAME" .output/*.zip --title "Finite $GITHUB_REF_NAME" --notes-file notes.md $flags
